@@ -1,7 +1,7 @@
 CC = gcc
 
-mydbg: main.c child.c parent.c include/core.h include/launch.h include/wait.h
-	$(CC) -o mydbg main.c child.c parent.c include/launch.c include/wait.c
+mydbg: main.c include/debug.h include/breakpoint.h
+	$(CC) -o mydbg main.c include/debugger.c include/breakpoint.c
 
 all: mydbg
 

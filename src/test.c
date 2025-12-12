@@ -1,6 +1,8 @@
-#include <stdio.h>
+void foo() {
+    puts("inside foo");
+}
 
 int main() {
-    printf("Hello from user program!\n");
-    return 0;
+    foo();
+    foo();
 }
