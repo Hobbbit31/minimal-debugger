@@ -56,26 +56,34 @@ int setBP(pid_t pid , unsigned long addr){
         return -1;
     }
 
-    errno = 0;
-    long word = ptrace(PTRACE_PEEKDATA, pid, (void *)addr, NULL);
-    if (word == -1 && errno) {
-        perror("ptrace PEEKDATA");
-        return -1;
-    }
+    unsigned long add = breakpoints[idx].addr;
 
-    /* save original instruction word */
+    long word = ptrace(PTRACE_PEEKDATA, pid, add, 0);
     breakpoints[idx].orig_word = word;
 
-    /* replace lowest byte with INT3 (0xCC) */
-    long new_word = (word & ~0xFF) | 0xCC;
+    long int3 = (word & ~0xFF) | 0xCC;
+    ptrace(PTRACE_POKEDATA, pid, add, int3);
 
-    if (ptrace(PTRACE_POKEDATA, pid, (void *)addr, (void *)new_word) == -1) {
-        perror("ptrace POKEDATA");
-        return -1;
-    }
+    // errno = 0;
+    // long word = ptrace(PTRACE_PEEKDATA, pid, (void *)addr, NULL);
+    // if (word == -1 && errno) {
+    //     perror("ptrace PEEKDATA");
+    //     return -1;
+    // }
 
-    printf("[dbg] breakpoint set at 0x%lx\n", addr);
-    return 0;
+    // /* save original instruction word */
+    // breakpoints[idx].orig_word = word;
+
+    // /* replace lowest byte with INT3 (0xCC) */
+    // long new_word = (word & ~0xFF) | 0xCC;
+
+    // if (ptrace(PTRACE_POKEDATA, pid, (void *)addr, (void *)new_word) == -1) {
+    //     perror("ptrace POKEDATA");
+    //     return -1;
+    // }
+
+    // // printf("[dbg] breakpoint set at 0x%lx\n", addr);
+    // return 0;
 }
 
 int clearBP(pid_t pid , unsigned long addr){
@@ -85,23 +93,28 @@ int clearBP(pid_t pid , unsigned long addr){
         return -1;
     }
 
-    errno = 0;
-    long word = ptrace(PTRACE_PEEKDATA, pid, (void *)addr, NULL);
-    if (word == -1 && errno) {
-        perror("ptrace PEEKDATA");
-        return -1;
-    }
+    unsigned long add = breakpoints[idx].addr;
+    long word = breakpoints[idx].orig_word;
 
-    /* restore lowest byte from saved instruction */
-    long restored =
-        (word & ~0xFF) | (breakpoints[idx].orig_word & 0xFF);
+    ptrace(PTRACE_POKEDATA, pid, add, word);
 
-    if (ptrace(PTRACE_POKEDATA, pid, (void *)addr, (void *)restored) == -1) {
-        perror("ptrace POKEDATA");
-        return -1;
-    }
+    // errno = 0;
+    // long word = ptrace(PTRACE_PEEKDATA, pid, (void *)addr, NULL);
+    // if (word == -1 && errno) {
+    //     perror("ptrace PEEKDATA");
+    //     return -1;
+    // }
 
-    printf("[dbg] breakpoint removed at 0x%lx\n", addr);
+    // /* restore lowest byte from saved instruction */
+    // long restored =
+    //     (word & ~0xFF) | (breakpoints[idx].orig_word & 0xFF);
+
+    // if (ptrace(PTRACE_POKEDATA, pid, (void *)addr, (void *)restored) == -1) {
+    //     perror("ptrace POKEDATA");
+    //     return -1;
+    // }
+
+    // printf("[dbg] breakpoint removed at 0x%lx\n", addr);
     return 0;
 }
 

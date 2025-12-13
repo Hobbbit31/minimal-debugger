@@ -59,13 +59,18 @@ int main(void)
 
             if (launchDebugger(&dbg, prog, args) == 0) {
                 dbg.state = STOPPED;
-                addBP(0x401136);
-                setBP(dbg.child_pid, 0x401136);
+                addBP(0x40113e);
+                addBP(0x40115f);
+
+                setBP(dbg.child_pid, 0x40113e);
+                setBP(dbg.child_pid, 0x40115f);
                 // continueDebugger(&dbg);   // SIGTRAP
                 
             }
             continue;
         }
+
+
 
         //comtinue
         if(strcmp(line, "continue") == 0) {

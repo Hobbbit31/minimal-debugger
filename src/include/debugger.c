@@ -51,56 +51,45 @@ int launchDebugger(Debugger *dbg, char *prog, char **args){
 }
 
 int continueDebugger(Debugger *dbg){
-    if (dbg->state != STOPPED) {
-        fprintf(stderr, "[dbg] cannot continue: process not stopped\n");
-        return -1;
-    }
-
-    if (ptrace(PTRACE_CONT, dbg->child_pid, NULL, NULL) == -1) {
-        perror("ptrace CONT");
-        return -1;
-    }
-
-    dbg->state = RUNNING;
-
     int status;
-    if (waitpid(dbg->child_pid, &status, 0) == -1) {
-        perror("waitpid");
+    int auto_continued = 0;   // 🔑 NEW
+
+    if (dbg->state != STOPPED) {
+        fprintf(stderr, "[dbg] cannot continue\n");
         return -1;
     }
 
-    if (WIFSTOPPED(status)) {
-        int sig = WSTOPSIG(status);
+    while (1) {
+        ptrace(PTRACE_CONT, dbg->child_pid, NULL, NULL);
+        dbg->state = RUNNING;
 
-        dbg->state = STOPPED;
+        waitpid(dbg->child_pid, &status, 0);
 
-        if (sig == SIGTRAP) {
-            // printf("[dbg] breakpoint hit (SIGTRAP)\n");
-
-            // /* restore original instruction */
-            // clearBP(dbg->child_pid, 0x401136);   // TEMP: hardcoded addr
-
-            handleBP(dbg);
-        } else {
-            printf("[dbg] child stopped by signal %d\n", sig);
+        if (WIFEXITED(status)) {
+            dbg->state = EXITED;
+            printf("[dbg] child exited with status %d\n",
+                   WEXITSTATUS(status));
+            return 0;
         }
 
-        return 0;
-    }
+        if (WIFSTOPPED(status)) {
+            int sig = WSTOPSIG(status);
 
-    if (WIFEXITED(status)) {
-        dbg->state = EXITED;
-        printf("[dbg] child exited with status %d\n", WEXITSTATUS(status));
-        return 0;
-    }
+            if (sig == SIGTRAP) {
+                if (handleBP(dbg)) {
+                    if (!auto_continued) {
+                        // 🔑 auto-continue ONLY ONCE
+                        auto_continued = 1;
+                        continue;
+                    }
+                }
+            }
 
-    if (WIFSIGNALED(status)) {
-        dbg->state = EXITED;
-        printf("[dbg] child terminated by signal %d\n", WTERMSIG(status));
-        return 0;
+            // 🔑 user-visible stop
+            dbg->state = STOPPED;
+            return 0;
+        }
     }
-
-    return 0;
 }
 
 int debuggerStep(Debugger *dbg){
@@ -143,8 +132,7 @@ int debuggerStep(Debugger *dbg){
     return 0;
 }
 
-int handleBP(Debugger *dbg)
-{
+int handleBP(Debugger *dbg){
     struct user_regs_struct regs;
     int status;
 
