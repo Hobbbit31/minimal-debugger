@@ -72,7 +72,7 @@ int handleBP(Debugger *dbg){
     if (idx < 0)
         return 0;   // not our breakpoint
 
-    printf("[dbg] breakpoint hit at 0x%lx\n", addr);
+    // printf("[dbg] breakpoint hit at 0x%lx\n", addr);
 
     // restore original instruction
     clearBP(dbg->child_pid, addr);
@@ -111,31 +111,39 @@ int launchDebugger(Debugger *dbg, char *prog, char **args){
     return 0;
 }
 
-
-int continueDebugger(Debugger *dbg){
+int continueDebugger(Debugger *dbg)
+{
     int status;
-    int skipped_first_breakpoint = 0;
 
-    while (1) {
-        ptrace(PTRACE_CONT, dbg->child_pid, 0, 0);
-        waitpid(dbg->child_pid, &status, 0);
-
-        if (WIFEXITED(status)) {
-            printf("[dbg] child exited with status %d\n",
-                   WEXITSTATUS(status));
-            dbg->state = EXITED;
-            return 0;
-        }
-
-        if (WIFSTOPPED(status)) {
-            if (handleBP(dbg)) {
-                if (!skipped_first_breakpoint) {
-                    skipped_first_breakpoint = 1;
-                    continue;   // ignore first BP
-                }
-            }
-            dbg->state = STOPPED;
-            return 0;           // stop for user
-        }
+    if (dbg->state == EXITED) {
+        printf("[dbg] program has already exited\n");
+        return 0;
     }
+
+    ptrace(PTRACE_CONT, dbg->child_pid, 0, 0);
+    waitpid(dbg->child_pid, &status, 0);
+
+    if (WIFEXITED(status)) {
+        printf("[dbg] child exited with status %d\n",
+               WEXITSTATUS(status));
+        dbg->state = EXITED;
+        return 0;
+    }
+
+    if (WIFSTOPPED(status)) {
+
+        if (handleBP(dbg)) {
+            struct user_regs_struct regs;
+            ptrace(PTRACE_GETREGS, dbg->child_pid, 0, &regs);
+
+            printf("[dbg] breakpoint hit at 0x%llx\n",
+                   regs.rip - 1);
+        }
+
+        dbg->state = STOPPED;
+        return 0;
+    }
+
+    return 0;
 }
+

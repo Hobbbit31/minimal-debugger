@@ -1,13 +1,10 @@
 #include <stdio.h>
- int pan = 0;
+int pan = 0;
 
 int main() {
-   
-    pan=1;
+    pan = 1;
     printf("%d\n", pan);
-    pan=2;
+    pan = 2;
     printf("%d\n", pan);
-
-    return 1;
-
+    return 0;
 }
