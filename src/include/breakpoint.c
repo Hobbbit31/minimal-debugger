@@ -58,32 +58,19 @@ int setBP(pid_t pid , unsigned long addr){
 
     unsigned long add = breakpoints[idx].addr;
 
+    // Read the original instruction word
     long word = ptrace(PTRACE_PEEKDATA, pid, add, 0);
+
+    // Save original instruction for later restoration
     breakpoints[idx].orig_word = word;
 
+    // Replace lowest byte with INT3 (0xCC)
     long int3 = (word & ~0xFF) | 0xCC;
+
+    // Write modified instruction back to the process
     ptrace(PTRACE_POKEDATA, pid, add, int3);
 
-    // errno = 0;
-    // long word = ptrace(PTRACE_PEEKDATA, pid, (void *)addr, NULL);
-    // if (word == -1 && errno) {
-    //     perror("ptrace PEEKDATA");
-    //     return -1;
-    // }
-
-    // /* save original instruction word */
-    // breakpoints[idx].orig_word = word;
-
-    // /* replace lowest byte with INT3 (0xCC) */
-    // long new_word = (word & ~0xFF) | 0xCC;
-
-    // if (ptrace(PTRACE_POKEDATA, pid, (void *)addr, (void *)new_word) == -1) {
-    //     perror("ptrace POKEDATA");
-    //     return -1;
-    // }
-
-    // // printf("[dbg] breakpoint set at 0x%lx\n", addr);
-    // return 0;
+    return 0;
 }
 
 int clearBP(pid_t pid , unsigned long addr){
@@ -96,25 +83,10 @@ int clearBP(pid_t pid , unsigned long addr){
     unsigned long add = breakpoints[idx].addr;
     long word = breakpoints[idx].orig_word;
 
+    // Restore the original instruction
     ptrace(PTRACE_POKEDATA, pid, add, word);
 
-    // errno = 0;
-    // long word = ptrace(PTRACE_PEEKDATA, pid, (void *)addr, NULL);
-    // if (word == -1 && errno) {
-    //     perror("ptrace PEEKDATA");
-    //     return -1;
-    // }
 
-    // /* restore lowest byte from saved instruction */
-    // long restored =
-    //     (word & ~0xFF) | (breakpoints[idx].orig_word & 0xFF);
-
-    // if (ptrace(PTRACE_POKEDATA, pid, (void *)addr, (void *)restored) == -1) {
-    //     perror("ptrace POKEDATA");
-    //     return -1;
-    // }
-
-    // printf("[dbg] breakpoint removed at 0x%lx\n", addr);
     return 0;
 }
 

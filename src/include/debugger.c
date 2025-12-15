@@ -8,45 +8,51 @@
 #include "debug.h"
 #include "breakpoint.h"
 
+
+/*
+ * Step one CPU instruction.
+ * This means: do only ONE tiny move and stop again.
+ */
 int debuggerStep(Debugger *dbg){
-    if (dbg->state != STOPPED) {
-        fprintf(stderr, "[dbg] cannot step: process not stopped\n");
+
+    //Cannot step if program has already exited
+    if (dbg->state == EXITED) {
+        printf("[dbg] cannot step: program has exited\n");
         return -1;
     }
 
-    if (ptrace(PTRACE_SINGLESTEP, dbg->child_pid, NULL, NULL) == -1) {
+    // Single-step is only allowed when the program is stopped
+    if (dbg->state != STOPPED) {
+        printf("[dbg] cannot step: program is not stopped\n");
+        return -1;
+    }
+
+    // Ask kernel to execute exactly one instruction
+    if (ptrace(PTRACE_SINGLESTEP, dbg->child_pid, 0, 0) == -1) {
         perror("ptrace SINGLESTEP");
         return -1;
     }
 
-    dbg->state = RUNNING;
-
+    // Wait for the child to stop or exit
     int status;
     if (waitpid(dbg->child_pid, &status, 0) == -1) {
         perror("waitpid");
         return -1;
     }
 
-    if (WIFSTOPPED(status)) {
-        dbg->state = STOPPED;
-        printf("[dbg] single-step stop (signal %d)\n", WSTOPSIG(status));
-        return 0;
-    }
-
+    // If the program exited during single-step
     if (WIFEXITED(status)) {
         dbg->state = EXITED;
-        printf("[dbg] child exited with status %d\n", WEXITSTATUS(status));
+        printf("[dbg] child exited\n");
         return 0;
     }
 
-    if (WIFSIGNALED(status)) {
-        dbg->state = EXITED;
-        printf("[dbg] child terminated by signal %d\n", WTERMSIG(status));
-        return 0;
-    }
 
+    // Otherwise, the program stopped again
+    dbg->state = STOPPED;
     return 0;
 }
+
 
 void printRegisters(Debugger *dbg){
     struct user_regs_struct r;
@@ -58,50 +64,82 @@ void printRegisters(Debugger *dbg){
     printf("RAX: 0x%llx\n", r.rax);
 }
 
-
-
+/*
+ * This function fixes breakpoints.
+ * It does the magic:
+ * 1) remove INT3
+ * 2) fix RIP
+ * 3) step once
+ * 4) put INT3 back
+ */
 int handleBP(Debugger *dbg){
-    struct user_regs_struct r;
-    int status;
+    struct user_regs_struct regs;
 
-    ptrace(PTRACE_GETREGS, dbg->child_pid, 0, &r);
+    // Read current register state
+    ptrace(PTRACE_GETREGS, dbg->child_pid, 0, &regs);
 
-    unsigned long addr = r.rip - 1;
-    int idx = findBP(addr);
+    unsigned long rip = regs.rip;
+    unsigned long bp_addr = 0;
+    int found = 0;
 
-    if (idx < 0)
-        return 0;   // not our breakpoint
+    //  find which breakpoint was hit 
+    for (int i = 0; i < MAX_BREAKPOINTS; i++) {
+        if (breakpoints[i].used &&
+            rip == breakpoints[i].addr + 1) {
+            bp_addr = breakpoints[i].addr;
+            found = 1;
+            break;
+        }
+    }
 
-    // printf("[dbg] breakpoint hit at 0x%lx\n", addr);
+    // If SIGTRAP was not caused by our breakpoint
+    if (!found)
+        return 0;
 
-    // restore original instruction
-    clearBP(dbg->child_pid, addr);
+    // Restore original instruction (remove INT3)
+    clearBP(dbg->child_pid, bp_addr);
 
-    // go back to real instruction
-    r.rip = addr;
-    ptrace(PTRACE_SETREGS, dbg->child_pid, 0, &r);
+    // Move RIP back to the real instruction
+    regs.rip = bp_addr;
+    if (ptrace(PTRACE_SETREGS, dbg->child_pid, 0, &regs) == -1) {
+        perror("ptrace SETREGS");
+        return -1;
+    }
 
-    // execute it once
-    ptrace(PTRACE_SINGLESTEP, dbg->child_pid, 0, 0);
-    waitpid(dbg->child_pid, &status, 0);
+    // Execute the original instruction once
+    if (ptrace(PTRACE_SINGLESTEP, dbg->child_pid, 0, 0) == -1) {
+        perror("ptrace SINGLESTEP (bp)");
+        return -1;
+    }
+    waitpid(dbg->child_pid, NULL, 0);
 
-    // put breakpoint back
-    setBP(dbg->child_pid, addr);
+    // put breakpoint back 
+    setBP(dbg->child_pid, bp_addr);
 
+    printf("[dbg] breakpoint hit at 0x%lx\n", bp_addr);
     return 1;
 }
 
 
+/*
+ * Start the program we want to debug.
+ * Parent = debugger
+ * Child = program
+ */
 int launchDebugger(Debugger *dbg, char *prog, char **args){
     pid_t pid = fork();
 
     if (pid == 0) {
+        // Child: request tracing by parent 
         ptrace(PTRACE_TRACEME, 0, 0, 0);
+
+        // Replace process image with target program
         execvp(prog, args);
         perror("execvp");
         _exit(1);
     }
 
+    // Parent waits for child to stop after exec
     waitpid(pid, NULL, 0);
 
     dbg->child_pid = pid;
@@ -111,35 +149,46 @@ int launchDebugger(Debugger *dbg, char *prog, char **args){
     return 0;
 }
 
-int continueDebugger(Debugger *dbg)
-{
+
+
+
+/*
+ * Continue running the program.
+ * Stop when:
+ * - breakpoint
+ * - program ends
+ */
+int continueDebugger(Debugger *dbg){
     int status;
 
+    // Cannot continue an exited program
     if (dbg->state == EXITED) {
         printf("[dbg] program has already exited\n");
         return 0;
     }
 
-    ptrace(PTRACE_CONT, dbg->child_pid, 0, 0);
-    waitpid(dbg->child_pid, &status, 0);
+    // Resume executio
+    if (ptrace(PTRACE_CONT, dbg->child_pid, 0, 0) == -1) {
+        perror("ptrace CONT");
+        return -1;
+    }
 
+    // Wait for the next event
+    if (waitpid(dbg->child_pid, &status, 0) == -1) {
+        perror("waitpid");
+        return -1;
+    }
+
+    // Program exited normally
     if (WIFEXITED(status)) {
-        printf("[dbg] child exited with status %d\n",
-               WEXITSTATUS(status));
+        printf("[dbg] child exited with status %d\n", WEXITSTATUS(status));
         dbg->state = EXITED;
         return 0;
     }
 
-    if (WIFSTOPPED(status)) {
-
-        if (handleBP(dbg)) {
-            struct user_regs_struct regs;
-            ptrace(PTRACE_GETREGS, dbg->child_pid, 0, &regs);
-
-            printf("[dbg] breakpoint hit at 0x%llx\n",
-                   regs.rip - 1);
-        }
-
+    // Program stopped due to SIGTRAP (breakpoint or single-step)
+    if (WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP) {
+        handleBP(dbg);
         dbg->state = STOPPED;
         return 0;
     }
