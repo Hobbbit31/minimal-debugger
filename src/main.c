@@ -5,7 +5,7 @@
 #include "include/breakpoint.h"
 
 
-static void print_help(void){
+void print_help(void){
     puts("commands:");
     puts("  run <program>   start a program under debugger");
     puts("  continue        resume execution");
@@ -96,6 +96,7 @@ int main(){
             continue;
         }
         
+        // delete
         if (strncmp(line, "delete ", 7) == 0) {
             if (dbg.state == NOT_STARTED) {
                 printf("[dbg] program not started\n");
