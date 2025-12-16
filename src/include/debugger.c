@@ -97,7 +97,10 @@ int handleBP(Debugger *dbg){
         return 0;
 
     // Restore original instruction (remove INT3)
-    clearBP(dbg->child_pid, bp_addr);
+    if (clearBP(dbg->child_pid, bp_addr) == -1) {
+        fprintf(stderr, "[dbg] failed to clear breakpoint at 0x%lx\n", bp_addr);
+        return -1;
+    }
 
     // Move RIP back to the real instruction
     regs.rip = bp_addr;
@@ -111,10 +114,16 @@ int handleBP(Debugger *dbg){
         perror("ptrace SINGLESTEP (bp)");
         return -1;
     }
-    waitpid(dbg->child_pid, NULL, 0);
+    if (waitpid(dbg->child_pid, NULL, 0) == -1) {
+        perror("waitpid (bp step)");
+        return -1;
+    }
 
     // put breakpoint back 
-    setBP(dbg->child_pid, bp_addr);
+    if (setBP(dbg->child_pid, bp_addr) == -1) {
+        fprintf(stderr, "[dbg] failed to restore breakpoint at 0x%lx\n", bp_addr);
+        return -1;
+    }
 
     printf("[dbg] breakpoint hit at 0x%lx\n", bp_addr);
     return 1;
@@ -212,11 +221,24 @@ int continueDebugger(Debugger *dbg){
 
     // Program stopped due to SIGTRAP (breakpoint or single-step)
     if (WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP) {
-        handleBP(dbg);
+        if (handleBP(dbg) < 0) {
+            fprintf(stderr, "[dbg] breakpoint handling failed\n");
+        }
+        dbg->state = STOPPED;
+        return 0;
+    }
+
+    if (WIFSIGNALED(status)) {
+        printf("[dbg] child killed by signal %d\n", WTERMSIG(status));
+        dbg->state = EXITED;
+        return 0;
+    }
+
+    if (WIFSTOPPED(status)) {
+        printf("[dbg] child stopped by signal %d\n", WSTOPSIG(status));
         dbg->state = STOPPED;
         return 0;
     }
 
     return 0;
 }
-
