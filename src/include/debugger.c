@@ -9,6 +9,17 @@
 #include "breakpoint.h"
 
 
+
+unsigned long logicalrip(unsigned long real_rip){
+    for (int i = 0; i < MAX_BREAKPOINTS; i++) {
+        if (breakpoints[i].used &&
+            real_rip == breakpoints[i].addr + 1) {
+            return breakpoints[i].addr;
+        }
+    }
+    return real_rip;
+}
+
 /*
  * Step one CPU instruction.
  * This means: do only ONE tiny move and stop again.
@@ -54,14 +65,39 @@ int debuggerStep(Debugger *dbg){
 }
 
 
-void printRegisters(Debugger *dbg){
+void printRegisters(Debugger *dbg , state st){
     struct user_regs_struct r;
-    ptrace(PTRACE_GETREGS, dbg->child_pid, NULL, &r);
+    if(ptrace(PTRACE_GETREGS, dbg->child_pid, NULL, &r) == -1){
+        perror("Error getregs(debugger.c)");
+        return;
+    }
+    
+    if(st == STACK || st == ALL){
+        unsigned long lrip = logicalrip(r.rip);;
+        printf("RIP: 0x%lx\n", lrip);
+        printf("RSP: 0x%llx\n", r.rsp);
+        printf("RBP: 0x%llx\n", r.rbp);
+    }
 
-    printf("RIP: 0x%llx\n", r.rip);
-    printf("RSP: 0x%llx\n", r.rsp);
-    printf("RBP: 0x%llx\n", r.rbp);
-    printf("RAX: 0x%llx\n", r.rax);
+    if(st == GENERAL || st == ALL){
+        printf("RAX: 0x%llx\n", r.rax);
+        printf("RBX: 0x%llx\n", r.rbx);
+        printf("RCX: 0x%llx\n", r.rcx);
+        printf("RDX: 0x%llx\n", r.rdx);
+        printf("RSI: 0x%llx\n", r.rsi);
+        printf("RDI: 0x%llx\n", r.rdi);
+
+        printf("R8 : 0x%llx\n", r.r8);
+        printf("R9 : 0x%llx\n", r.r9);
+        printf("R10: 0x%llx\n", r.r10);
+        printf("R11: 0x%llx\n", r.r11);
+        printf("R12: 0x%llx\n", r.r12);
+        printf("R13: 0x%llx\n", r.r13);
+        printf("R14: 0x%llx\n", r.r14);
+        printf("R15: 0x%llx\n", r.r15);
+    }
+    
+
 }
 
 /*
@@ -178,6 +214,7 @@ int continueDebugger(Debugger *dbg){
         perror("waitpid");
         return -1;
     }
+    dbg->lastStatus = status;
 
     // Program exited normally
     if (WIFEXITED(status)) {
@@ -188,7 +225,12 @@ int continueDebugger(Debugger *dbg){
 
     // Program stopped due to SIGTRAP (breakpoint or single-step)
     if (WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP) {
-        handleBP(dbg);
+        if (handleBP(dbg)) {
+            dbg->state = STOPPED;
+            return 0;   // breakpoint stop
+        }
+
+        // SIGTRAP but NOT a breakpoint (likely single-step)
         dbg->state = STOPPED;
         return 0;
     }
@@ -196,3 +238,32 @@ int continueDebugger(Debugger *dbg){
     return 0;
 }
 
+
+void printProcessStatus(Debugger *dbg){
+    
+    if (dbg->state == NOT_STARTED) {
+        printf("Process state: NOT_STARTED\n");
+        return;
+    }
+
+    if (dbg->state == RUNNING) {
+        printf("Process state: RUNNING\n");
+        return;
+    }
+
+    if (dbg->state == EXITED) {
+        printf("Process state: EXITED\n");
+        return;
+    }
+
+    /* STOPPED → need kernel reason */
+    int status = dbg->lastStatus;
+
+    if (WIFSTOPPED(status)) {
+        printf("Process state: STOPPED (signal %d)\n",
+               WSTOPSIG(status));
+    }
+    else {
+        printf("Process state: STOPPED\n");
+    }
+}

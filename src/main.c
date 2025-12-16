@@ -19,6 +19,7 @@ int main(){
     Debugger dbg;
     dbg.child_pid = -1;
     dbg.state = NOT_STARTED;
+    dbg.lastStatus = 0;
 
     char line[128];
 
@@ -42,6 +43,12 @@ int main(){
         //help
         if (strcmp(line, "help") == 0) {
             print_help();
+            continue;
+        }
+        
+        // process status
+        if(strcmp(line, "status") == 0){
+            printProcessStatus(&dbg);
             continue;
         }
 
@@ -93,6 +100,28 @@ int main(){
             } else {
                 printf("[dbg] failed to add breakpoint\n");
             }
+            continue;
+        }
+
+        // print the regs
+        if(strncmp(line , "regs" ,4) == 0){
+            if (dbg.state != STOPPED) {
+                printf("[dbg] process is not stopped\n");
+                continue;
+            }
+
+            state mode = ALL;
+
+            if(strcmp(line, "regs -s") == 0) {
+                mode = STACK;
+            } else if(strcmp(line, "regs -g") == 0) {
+                mode = GENERAL;
+            }else if (strcmp(line, "regs") != 0) {
+                printf("[dbg] usage: regs [-s|-g]\n");
+            continue;
+            }
+
+            printRegisters(&dbg, mode);
             continue;
         }
         
