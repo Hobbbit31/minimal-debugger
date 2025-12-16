@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include "include/debug.h"
 #include "include/breakpoint.h"
 
@@ -57,10 +58,36 @@ int main(){
             dbg.child_pid = -1;
             dbg.state = NOT_STARTED;
 
-            // Extract program name
-            char *prog = line + 4;
-            char *args[] = { prog, NULL };
-            if (launchDebugger(&dbg, prog, args) == 0) {
+            // Extract program name + arguments
+            char *cmd = line + 4;
+            while (*cmd == ' ')
+                cmd++;
+
+            if (*cmd == '\0') {
+                printf("[dbg] missing program name\n");
+                continue;
+            }
+
+            char *argv[64];
+            int argc = 0;
+            char *saveptr = NULL;
+            char *tok = strtok_r(cmd, " \t", &saveptr);
+            for (; tok && argc < 63; tok = strtok_r(NULL, " \t", &saveptr)) {
+                argv[argc++] = tok;
+            }
+            if (tok != NULL) {
+                printf("[dbg] too many arguments (max 63)\n");
+                continue;
+            }
+            argv[argc] = NULL;
+
+            // Basic validation: if a path is provided, ensure it is executable
+            if (strchr(argv[0], '/') && access(argv[0], X_OK) != 0) {
+                perror("[dbg] cannot execute program");
+                continue;
+            }
+
+            if (launchDebugger(&dbg, argv[0], argv) == 0) {
                 dbg.state = STOPPED;
             }
             continue;

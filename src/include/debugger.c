@@ -129,18 +129,42 @@ int handleBP(Debugger *dbg){
 int launchDebugger(Debugger *dbg, char *prog, char **args){
     pid_t pid = fork();
 
+    if (pid < 0) {
+        perror("fork");
+        return -1;
+    }
+
     if (pid == 0) {
         // Child: request tracing by parent 
-        ptrace(PTRACE_TRACEME, 0, 0, 0);
+        if (ptrace(PTRACE_TRACEME, 0, 0, 0) == -1) {
+            perror("ptrace TRACEME");
+            _exit(127);
+        }
 
         // Replace process image with target program
         execvp(prog, args);
         perror("execvp");
-        _exit(1);
+        _exit(127);
     }
 
     // Parent waits for child to stop after exec
-    waitpid(pid, NULL, 0);
+    int status = 0;
+    if (waitpid(pid, &status, 0) == -1) {
+        perror("waitpid");
+        return -1;
+    }
+
+    // If the child exited immediately, launching failed
+    if (WIFEXITED(status) || WIFSIGNALED(status)) {
+        fprintf(stderr, "[dbg] failed to start child process\n");
+        return -1;
+    }
+
+    // Expect the usual initial SIGTRAP stop from PTRACE_TRACEME+exec
+    if (!(WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP)) {
+        fprintf(stderr, "[dbg] unexpected child state after exec\n");
+        return -1;
+    }
 
     dbg->child_pid = pid;
     dbg->state = STOPPED;
