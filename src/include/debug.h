@@ -14,7 +14,7 @@ typedef struct {
     pid_t child_pid;
     dbgstate state;
     int lastStatus;
-
+   
 } Debugger;
 
 
@@ -37,6 +37,8 @@ void printRegisters(Debugger *dbg ,state st);
 unsigned long logicalrip(unsigned long real_rip);
 
 void printProcessStatus(Debugger *dbg);
+
+int stopDebugger(Debugger *dbg);
 
 #endif
 

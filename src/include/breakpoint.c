@@ -6,16 +6,18 @@
 Breakpoint breakpoints[32];
 
 
-void intializationBP(void)
-{
+void intializationBP(void){
     for (int i = 0; i < MAX_BREAKPOINTS; i++) {
         breakpoints[i].used = 0;
     }
 }
 
 // adding breakpoint address to atable
-int addBP(unsigned long addr)
-{
+int addBP(unsigned long addr){
+
+    if (findBP(addr) >= 0) {
+        return -2;  // already exists
+    }
     for (int i = 0; i < MAX_BREAKPOINTS; i++) {
         if (!breakpoints[i].used) {
             breakpoints[i].addr = addr;
@@ -27,8 +29,7 @@ int addBP(unsigned long addr)
 }
 
 // find BP from table
-int findBP(unsigned long addr)
-{
+int findBP(unsigned long addr){
     for (int i = 0; i < MAX_BREAKPOINTS; i++) {
         if (breakpoints[i].used && breakpoints[i].addr == addr) {
             return i;
@@ -38,8 +39,7 @@ int findBP(unsigned long addr)
 }
 
 // remove BP
-int removeBP(unsigned long addr)
-{
+int removeBP(unsigned long addr){
     int idx = findBP(addr);
     if (idx == -1)
         return -1;
@@ -52,14 +52,19 @@ int removeBP(unsigned long addr)
 int setBP(pid_t pid , unsigned long addr){ 
     int idx = findBP(addr);
     if (idx < 0) {
-        fprintf(stderr, "[dbg] breakpoint not registered\n");
+        fprintf(stderr, "[dbg](setBP,breakpoint.c) breakpoint not registered\n");
         return -1;
     }
 
     unsigned long add = breakpoints[idx].addr;
 
     // Read the original instruction word
+    errno = 0;
     long word = ptrace(PTRACE_PEEKDATA, pid, add, 0);
+    if(errno){
+        perror("ptrace_peekdata(setBP,breakpoint.c)");
+        return -1;
+    }
 
     // Save original instruction for later restoration
     breakpoints[idx].orig_word = word;
@@ -77,7 +82,7 @@ int setBP(pid_t pid , unsigned long addr){
 int clearBP(pid_t pid , unsigned long addr){
     int idx = findBP(addr);
     if (idx < 0) {
-        fprintf(stderr, "[dbg] breakpoint not found\n");
+        fprintf(stderr, "[dbg](clearBP,breakpoint.c) breakpoint not found\n");
         return -1;
     }
 

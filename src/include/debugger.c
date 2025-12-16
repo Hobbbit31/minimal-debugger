@@ -12,13 +12,23 @@
 
 unsigned long logicalrip(unsigned long real_rip){
     for (int i = 0; i < MAX_BREAKPOINTS; i++) {
-        if (breakpoints[i].used &&
-            real_rip == breakpoints[i].addr + 1) {
+        if (!breakpoints[i].used)
+            continue;
+
+        //INT3 advances RIP by one byte, so RIP == breakpoint address + 1
+        if (real_rip == breakpoints[i].addr + 1) {
+            return breakpoints[i].addr;
+        }
+
+        //RIP moved past INT3; map nearby instruction back to breakpoint for display
+        if (real_rip > breakpoints[i].addr && real_rip - breakpoints[i].addr <= 16) {
             return breakpoints[i].addr;
         }
     }
+
     return real_rip;
 }
+
 
 /*
  * Step one CPU instruction.
@@ -28,33 +38,33 @@ int debuggerStep(Debugger *dbg){
 
     //Cannot step if program has already exited
     if (dbg->state == EXITED) {
-        printf("[dbg] cannot step: program has exited\n");
+        printf("[dbg](step,debugger.c) cannot step: program has exited\n");
         return -1;
     }
 
     // Single-step is only allowed when the program is stopped
     if (dbg->state != STOPPED) {
-        printf("[dbg] cannot step: program is not stopped\n");
+        printf("[dbg](step,debugger.c) cannot step: program is not stopped\n");
         return -1;
     }
 
     // Ask kernel to execute exactly one instruction
     if (ptrace(PTRACE_SINGLESTEP, dbg->child_pid, 0, 0) == -1) {
-        perror("ptrace SINGLESTEP");
+        perror("ptrace SINGLESTEP(step,debugger.c)");
         return -1;
     }
 
     // Wait for the child to stop or exit
     int status;
     if (waitpid(dbg->child_pid, &status, 0) == -1) {
-        perror("waitpid");
+        perror("waitpid(step,debugger.c)");
         return -1;
     }
 
     // If the program exited during single-step
     if (WIFEXITED(status)) {
         dbg->state = EXITED;
-        printf("[dbg] child exited\n");
+        printf("[dbg](step,debugger.c) child exited\n");
         return 0;
     }
 
@@ -107,6 +117,7 @@ void printRegisters(Debugger *dbg , state st){
  * 2) fix RIP
  * 3) step once
  * 4) put INT3 back
+ * 5) 1- breakpoint handled  0 - not a breakpoint -1 - error
  */
 int handleBP(Debugger *dbg){
     struct user_regs_struct regs;
@@ -138,21 +149,26 @@ int handleBP(Debugger *dbg){
     // Move RIP back to the real instruction
     regs.rip = bp_addr;
     if (ptrace(PTRACE_SETREGS, dbg->child_pid, 0, &regs) == -1) {
-        perror("ptrace SETREGS");
+        perror("ptrace SETREGS(handleBP,debugger.c)");
         return -1;
     }
 
     // Execute the original instruction once
     if (ptrace(PTRACE_SINGLESTEP, dbg->child_pid, 0, 0) == -1) {
-        perror("ptrace SINGLESTEP (bp)");
+        perror("ptrace SINGLESTEP (bp) (handleBP,debugger.c)");
         return -1;
     }
-    waitpid(dbg->child_pid, NULL, 0);
+
+    int status;
+    waitpid(dbg->child_pid, &status, 0);
+    if(WIFEXITED(status)){
+        dbg->state = EXITED;
+    }
 
     // put breakpoint back 
     setBP(dbg->child_pid, bp_addr);
 
-    printf("[dbg] breakpoint hit at 0x%lx\n", bp_addr);
+    printf("[dbg](handleBP,debugger.c) breakpoint hit at 0x%lx\n", bp_addr);
     return 1;
 }
 
@@ -164,6 +180,7 @@ int handleBP(Debugger *dbg){
  */
 int launchDebugger(Debugger *dbg, char *prog, char **args){
     pid_t pid = fork();
+    int status;
 
     if (pid == 0) {
         // Child: request tracing by parent 
@@ -171,17 +188,19 @@ int launchDebugger(Debugger *dbg, char *prog, char **args){
 
         // Replace process image with target program
         execvp(prog, args);
-        perror("execvp");
+        perror("execvp (launchBP,debugger.c)");
         _exit(1);
     }
 
     // Parent waits for child to stop after exec
-    waitpid(pid, NULL, 0);
+    waitpid(pid, &status, 0);
+
+    dbg->lastStatus = status;
 
     dbg->child_pid = pid;
     dbg->state = STOPPED;
 
-    printf("[dbg] child %d stopped (ready)\n", pid);
+    printf("[dbg](launchBP,debugger.c) child %d stopped (ready)\n", pid);
     return 0;
 }
 
@@ -199,35 +218,48 @@ int continueDebugger(Debugger *dbg){
 
     // Cannot continue an exited program
     if (dbg->state == EXITED) {
-        printf("[dbg] program has already exited\n");
+        printf("[dbg](continueDBG,debugger.c) program has already exited\n");
         return 0;
     }
 
+    dbg->state = RUNNING;
     // Resume executio
     if (ptrace(PTRACE_CONT, dbg->child_pid, 0, 0) == -1) {
-        perror("ptrace CONT");
+        perror("ptrace CONT (continueDBG,debugger.c) ");
+        dbg->state = STOPPED;
         return -1;
     }
 
     // Wait for the next event
     if (waitpid(dbg->child_pid, &status, 0) == -1) {
-        perror("waitpid");
+        perror("waitpid (continueDBG,debugger.c) ");
+        dbg->state =STOPPED;
         return -1;
     }
     dbg->lastStatus = status;
 
     // Program exited normally
     if (WIFEXITED(status)) {
-        printf("[dbg] child exited with status %d\n", WEXITSTATUS(status));
+        printf("[dbg](continueDBG,debugger.c)  child exited with status %d\n", WEXITSTATUS(status));
         dbg->state = EXITED;
         return 0;
     }
 
     // Program stopped due to SIGTRAP (breakpoint or single-step)
     if (WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP) {
-        if (handleBP(dbg)) {
+        // if (handleBP(dbg)) {
+        //     dbg->state = STOPPED;
+        //     return 0;   // breakpoint stop
+        // }
+        // Handle breakpoint if this SIGTRAP is due to INT3
+        int bp = handleBP(dbg);
+        if (bp < 0) {
+            return -1;
+        }
+        if (bp == 1) {
+        // real breakpoint was hit and fixed
             dbg->state = STOPPED;
-            return 0;   // breakpoint stop
+            return 0;
         }
 
         // SIGTRAP but NOT a breakpoint (likely single-step)
@@ -240,7 +272,7 @@ int continueDebugger(Debugger *dbg){
 
 
 void printProcessStatus(Debugger *dbg){
-    
+
     if (dbg->state == NOT_STARTED) {
         printf("Process state: NOT_STARTED\n");
         return;
@@ -266,4 +298,20 @@ void printProcessStatus(Debugger *dbg){
     else {
         printf("Process state: STOPPED\n");
     }
+}
+
+
+int stopDebugger(Debugger *dbg){
+    if (dbg->state != RUNNING)
+        return 0;
+
+    // Send SIGSTOP to pause the child
+    kill(dbg->child_pid, SIGSTOP);
+
+    int status;
+    waitpid(dbg->child_pid, &status, 0);
+
+    dbg->lastStatus = status;
+    dbg->state = STOPPED;
+    return 0;
 }
