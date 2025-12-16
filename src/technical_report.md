@@ -103,8 +103,10 @@ Program execution begins by:
    - Calls `ptrace(PTRACE_TRACEME)`
    - Executes target program using `execvp()`
 3. Parent process:
-   - Waits for child to stop
+   - Waits for child to stop with `waitpid()`
+   - Verifies the expected initial `SIGTRAP` stop
    - Marks debugger state as `STOPPED`
+   - Aborts cleanly on `fork`, `ptrace`, `execvp`, or `waitpid` failure
 
 This ensures the debugger gains control **before the program executes any user code**.
 
@@ -155,10 +157,11 @@ A fixed-size breakpoint table is used for simplicity.
 ### 6.2 Setting a Breakpoint
 To set a breakpoint:
 
-1. Read original instruction using `PTRACE_PEEKDATA`
-2. Save original instruction word
-3. Replace lowest byte with `0xCC`
-4. Write modified word using `PTRACE_POKEDATA`
+1. Validate address (non-zero, aligned, and not already registered)
+2. Read original instruction using `PTRACE_PEEKDATA` with error checks
+3. Save original instruction word
+4. Replace lowest byte with `0xCC`
+5. Write modified word using `PTRACE_POKEDATA`, aborting on errors
 
 This causes the CPU to raise `SIGTRAP` when execution reaches the breakpoint.
 
@@ -220,17 +223,28 @@ When the program exits:
 
 This avoids illegal `ptrace()` calls and ensures graceful termination.
 
+### 8.3 Other Signals
+- `WIFSIGNALED`: reports the terminating signal and marks `EXITED`.
+- `WIFSTOPPED` with non-`SIGTRAP` signals: reports the stopping signal and keeps the state `STOPPED`.
+
 ---
 
 ## 9. Error Handling and Robustness
 
 The debugger performs error checking on critical system calls:
 
-- `ptrace()`
+- `fork()`
+- `ptrace()` (TRACEME, GET/SETREGS, CONT/SINGLESTEP, PEEK/POKE)
 - `waitpid()`
 - `execvp()`
 
 Invalid command sequences (e.g., stepping after exit) are safely rejected with clear messages.
+
+Robustness measures:
+- Breakpoints are only inserted when the tracee is stopped.
+- Original instruction words are restored on removal or after breakpoint hits.
+- Breakpoint add/set/clear paths abort on `ptrace` failures to avoid corrupting the debuggee.
+- Unexpected child states during launch are treated as failures.
 
 ---
 

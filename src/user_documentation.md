@@ -47,20 +47,22 @@ The Mini Debugger supports the following features:
 ## 5. Running a Program
 
 ### Command: `run`
-Starts a program under debugger control.
+Starts a program under debugger control, with optional arguments.
 
 Usage:
 
-- run <program>
+- run <program> [args...]
 
 Example:
 
-- run ./test
+- run ./test arg1 arg2
 
 Notes:
 - The program must exist and be executable
 - Only one program can be debugged at a time
 - Running a program initializes a fresh breakpoint table
+- Up to 63 arguments are supported; excess arguments are rejected
+- Explicit paths are checked with `access(..., X_OK)` before launch
 
 ---
 
@@ -129,6 +131,8 @@ Notes:
 - Breakpoints can only be set after the program is started
 - If the program is stopped, the breakpoint is activated immediately
 - If the program is running, the breakpoint is registered and activated on the next stop
+- Invalid/duplicate addresses are rejected; the debugger validates and refuses unsafe writes
+- Breakpoint insertion checks `ptrace` errors and aborts instead of corrupting the debuggee
 
 ---
 
@@ -234,9 +238,9 @@ The Mini Debugger intentionally keeps scope minimal:
 
 - No source-level debugging
 - No symbol resolution (function/line names)
-- No command-line argument parsing for debugged program
 - No multi-threaded debugging
 - No memory inspection commands
+- Argument parsing is simple (whitespace-delimited, no quoting/escaping)
 
 These limitations help maintain clarity and focus on core OS-level debugging concepts.
 
